@@ -1,5 +1,7 @@
-import TelegramBot, { type Message} from "node-telegram-bot-api";
-import {MongoClient, Db, Collection} from 'mongodb';
+import TelegramBot, { type Message } from "node-telegram-bot-api";
+import { GoogleSpreadsheet, GoogleSpreadsheetRow } from 'google-spreadsheet';
+
+import { serviceAccountAuth } from "./repositories/googleAuth";
 
 
 
@@ -7,89 +9,17 @@ import {MongoClient, Db, Collection} from 'mongodb';
 const IS_DEV = false
 const token = process.env.TELEGRAM_BOT_TOKEN || "";
 
+let runTimeChatIds: any = []
+
 if (token === "") {
   console.error("Please provide a valid Telegram Bot Token");
   process.exit(1);
 }
 
 
-//create the mongodb pool connection
+//init google auth
 
-// MongoDB connection URI
-const uri = 'mongodb://root:linhporo1@mongodb:27017';
-const dbName = 'tele_bot_db';
-const runTimeChatIds: any = []
-let client:  MongoClient;
-
-
-async function connectToDatabase(): Promise<Db> {
-  if (!client) {
-    client = new MongoClient(uri, {
-      maxPoolSize: 10, // Set the connection pool size
-    });
-    await client.connect();
-    console.log('MongoDB connected with connection pooling enabled');
-  }
-
-  return client.db(dbName);
-}
-
-
-async function createCollection(db: Db, collectionName: string) {
-  const collections = await db.listCollections().toArray();
-  if (collections.some((c: any) => c.name === collectionName)) {
-    console.log(`Collection ${collectionName} already exists`);
-    runTimeChatIds.push(collectionName)
-    return;
-  }
-  await db.createCollection(collectionName);
-  runTimeChatIds.push(collectionName)
-  console.log(`Collection ${collectionName} created`);
-}
-
-
-async function insertDocument(db: Db, collectionName: string, document: any) {
-  if (!document) {
-    console.error('No document provided');
-    return;
-  }
-
-  try {
-    const collection : Collection = db.collection(collectionName);
-
-    // Insert the document into the collection
-    const result = await collection.insertOne(document);
-
-    if (result.acknowledged) {
-      console.log(`Document inserted with _id: ${result.insertedId}`);
-    } else {
-      console.error('Document insertion failed');
-    }
-  } catch (error) {
-    console.error('Error inserting document:', error);
-  }
-}
-
-async function findOne(db :  Db, collectionName: string, id: any) {
-
-  const collection: Collection = db.collection(collectionName);
-
-  // Find the document
-  const document = await collection.findOne({
-    id,
-  });
-  return document;
-}
-
-
-async function queryDocuments(db: Db, collectionName: string, query: any) {
-  const collection: Collection = db.collection(collectionName);
-
-  // Find the documents
-  const documents = await collection.find(query).toArray();
-  return documents;
-}
-
+const doc = new GoogleSpreadsheet('1htRUzavIEYGGkjiISSltB1u9dv0eWU0q2HRM0OADB2A', serviceAccountAuth);
 
 
 // MongoDB client with connection pooling
@@ -97,78 +27,172 @@ const initTelegramBot = async () => {
 
 
 
-  const db = await connectToDatabase();
+  await doc.updateProperties({ title: 'helo' });
 
+
+
+
+  const renameDoc = async (doc: GoogleSpreadsheet, docName: string) => {
+    await doc.updateProperties({ title: docName });
+  }
+
+  const getAllTasks = async () => {
+    const doc = new GoogleSpreadsheet('1htRUzavIEYGGkjiISSltB1u9dv0eWU0q2HRM0OADB2A', serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    const tasks = sheet.headerValues
+    const cloneTasks = [...tasks]
+    const taskObject = []
+    // make an map of task with dead line
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i]
+      const deadLine = await getDeadLineWithTasks(rows, task)
+      cloneTasks[i] = task.trim().toLocaleUpperCase()
+      const hr = deadLine.hr ? deadLine.hr : ''
+      const replyTask = `${task} \n ⏰ ${deadLine.date ? hr + ' - ' + deadLine.date : 'No dead line'}`
+      taskObject.push({
+        replyTask,
+        task: cloneTasks[i],
+        originTaskName: task.trim(),
+        deadLine: deadLine.timeStamps,
+        hr,
+        date: deadLine.date ? deadLine.date : ''
+
+      })
+    }
+
+    taskObject.splice(0, 2)
+    cloneTasks.splice(0, 2)
+
+    taskObject.sort((a, b) => a.deadLine - b.deadLine)
+    const beatifulTasks = taskObject.map((task, i) => {
+      return `${i + 1}. ` + task.replyTask
+    })
+
+    return {
+      reply: beatifulTasks,
+      tasks: cloneTasks,
+      taskObject,
+      rows,
+    };
+  }
+
+  const getDeadLineWithTasks = async (rows: GoogleSpreadsheetRow<Record<string, any>>[], taskName: string): Promise<{
+    date: string,
+    hr: string
+    timeStamps: number
+  }> => {
+    const [day, month, year] = rows[2].get(taskName).split('/');
+    const timeStamps = new Date(`${year}-${month}-${day}T${rows[3].get(taskName)}`);
+    return {
+      date: rows[2].get(taskName),
+      hr: rows[3].get(taskName),
+      timeStamps: timeStamps.getTime()
+    }
+  }
+
+  const remindDeadLine = async (taskName: string): Promise<string> => {
+    const {  taskObject } = await getAllTasks()
+     const filteredTask = taskObject.filter((task) => task.task === taskName.toLocaleUpperCase())
+
+    if (filteredTask.length === 0) return 'Task not found ❌'
+
+    const task = filteredTask[0]
+
+    return `🆘 Team nhớ hoàn thành Deadline ${taskName.toLocaleUpperCase()} trước ${task.hr} ngày ${task.date}`
+
+  }
+
+  const tickTaskDone = async (taskName: string, userId: string): Promise<string | null> => {
+
+    const { rows, taskObject } = await getAllTasks()
+    const userIdRow = rows.findIndex((row) => {
+      return row.get('ID') === userId
+    })
+
+    if (userIdRow === -1) return 'Tài khoản của bạn chưa có trong bản quản lý Task ❌ '
+
+
+    const filteredTask = taskObject.filter((task) => task.task === taskName.toLocaleUpperCase())
+    if (filteredTask.length === 0) return 'Không tìm thấy Task ❌🔎'
+
+    const orginTaskName = filteredTask[0].originTaskName.trim()
+    
+
+
+    if (rows[userIdRow].get(orginTaskName) === 'FALSE') {
+      rows[userIdRow].set(orginTaskName, 'TRUE')
+      rows[userIdRow].save()
+      return `Hệ thống đã cập nhật task ${orginTaskName} cho bạn ✅`
+    } else {
+      return null
+    }
+
+
+  }
 
 
 
   // Create a bot instance
   const bot = new TelegramBot(token, { polling: true });
-  let chatIds = [];
 
 
-
-
-  //get all member in group
-  bot.onText(/\/sendid/, async (msg : Message   ) => {
+  bot.onText(/\/renameDoc ./, async (msg: Message) => {
     const chatId = msg.chat.id;
+    if (!msg.text) return
+    const text = msg.text.split(' ')
+    const docName = text.map((t, index) => index === 0 ? '' : t).join(' ')
+    await renameDoc(doc, docName)
+    bot.sendMessage(chatId, `Doc name updated to ${docName}`);
+  })
+
+  bot.onText(/\/listtasks/, async (msg: Message) => {
+    const chatId = msg.chat.id;
+    const allTask = await getAllTasks()
+    bot.sendMessage(chatId, `💠 There are ${allTask.reply.length} tasks active: \n ${allTask.reply.join('\n\n ')}`);
+  })
 
 
-    if (!runTimeChatIds.includes(chatId)) {
-      await createCollection(db, `group${chatId}`);
+  bot.onText(/\/remind ./, async (msg: Message) => {
+    const chatId = msg.chat.id;
+    if (!msg.text) return
+    const text = msg.text.split(' ')
+    const taksName = text.map((t, index) => index === 0 ? '' : t).join(' ')
+    const result = await remindDeadLine(taksName)
+    bot.sendMessage(chatId, result);
+  })
+
+
+  bot.onText(/\/done ./, async (msg: Message) => {
+    const chatId = msg.chat.id;
+    if (!msg.text) return
+    const userId = msg.from?.id
+    if (!userId) {
+      bot.sendMessage(chatId, 'User is not found ❌')
+      return
     }
-
-    const member = msg.from;
-    if (!member) return
-    if (!member.id) return
-
-
-    const findResult = await findOne(db, `group${chatId}`, member.id);
-    if (findResult) {
-      bot.sendMessage(chatId, `Duplicate ID ❌`);
-      return;
+    const text = msg.text.split(' ')
+    const taksName = text.map((t, index) => index === 0 ? '' : t).join(' ')
+    const result = await tickTaskDone(taksName.trim(), userId.toString())
+    if (result) {
+      bot.sendMessage(chatId, `@${msg.from?.username} ${result}`);
     }
-    //send message to user that id had been added
-    bot.sendMessage(chatId, `ID added to the list ✅`);
-    await insertDocument(db, `group${chatId}`, { id: member.id, username: member.username });
+  })
+
+
+
+
+
+
+
+  bot.onText(/\/ping/, (msg: Message) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, "Pong!!");
   });
 
 
-
-
-  bot.onText(/\/start/, (msg: Message) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "Welcome to the bot!");
-  });
-
-  // bot.onText(/\/all (.+)/, async (msg, match) => {
-
-  bot.onText(/\/all/, async (msg : any, match : any) => {
-    const chatId = msg.chat.id;
-
-    const queryAllMemberFromGroupId  = await  queryDocuments(db, `group${chatId}`, {});
-    const ids = queryAllMemberFromGroupId.map((member : any) => member.id);
-
-
-    if (queryAllMemberFromGroupId.length === 0) {
-      bot.sendMessage(chatId, "There is no user to tag");
-      return;
-    }
-
-    const userNames: string[] = [];
-    for (let i = 0; i < ids.length; i++) {
-      await bot.getChatMember(chatId, ids[i]).then((res : any) => {
-        userNames.push(res.user.username);
-      });
-    }
-
-    const tagMessage = userNames.map((username) => `@${username}`).join(" ");
-
-    bot.sendMessage(chatId, `${tagMessage}`);
-  });
-
-  // Handle errors
-  bot.on("polling_error", (error : any) => {
+  bot.on("polling_error", (error: any) => {
     console.error(error);
   });
 
