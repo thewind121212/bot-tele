@@ -36,6 +36,8 @@ const initTelegramBot = async () => {
     await doc.updateProperties({ title: docName });
   }
 
+  const skipCol = 2
+
   const getAllTasks = async () => {
     const doc = new GoogleSpreadsheet('1htRUzavIEYGGkjiISSltB1u9dv0eWU0q2HRM0OADB2A', serviceAccountAuth);
     await doc.loadInfo();
@@ -44,8 +46,9 @@ const initTelegramBot = async () => {
     const tasks = sheet.headerValues
     const cloneTasks = [...tasks]
     const taskObject = []
-    // make an map of task with dead line
-    for (let i = 0; i < tasks.length; i++) {
+    // make an map of task with dead line i using one loop for better performance
+    for (let i = skipCol; i < tasks.length; i++) {
+      //the loop start from 2 because the first two rows not using for task
       const task = tasks[i]
       const deadLine = await getDeadLineWithTasks(rows, task)
       cloneTasks[i] = task.trim().toLocaleUpperCase()
@@ -58,13 +61,8 @@ const initTelegramBot = async () => {
         deadLine: deadLine.timeStamps,
         hr,
         date: deadLine.date ? deadLine.date : ''
-
       })
     }
-
-    taskObject.splice(0, 2)
-    cloneTasks.splice(0, 2)
-
     taskObject.sort((a, b) => a.deadLine - b.deadLine)
     const beatifulTasks = taskObject.map((task, i) => {
       return `${i + 1}. ` + task.replyTask
@@ -92,13 +90,26 @@ const initTelegramBot = async () => {
     }
   }
 
+
+  const getTheRightTasks = (taskName: string, taskObject: {
+    replyTask: string,
+    task: string,
+    originTaskName: string,
+    deadLine: number,
+    hr: string,
+    date: string
+  }[]) => {
+     const filteredTask = taskObject.filter((task) => task.task === taskName.toLocaleUpperCase())
+    const task = filteredTask[0]
+    return task
+
+  }
+
   const remindDeadLine = async (taskName: string): Promise<string> => {
     const {  taskObject } = await getAllTasks()
-     const filteredTask = taskObject.filter((task) => task.task === taskName.toLocaleUpperCase())
+    const task = getTheRightTasks(taskName, taskObject)
 
-    if (filteredTask.length === 0) return 'Task not found ❌'
-
-    const task = filteredTask[0]
+    if (!task) return 'Không tìm thấy Task ❌🔎'
 
     return `🆘 Team nhớ hoàn thành Deadline ${taskName.toLocaleUpperCase()} trước ${task.hr} ngày ${task.date}`
 
@@ -113,13 +124,12 @@ const initTelegramBot = async () => {
 
     if (userIdRow === -1) return 'Tài khoản của bạn chưa có trong bản quản lý Task ❌ '
 
-
-    const filteredTask = taskObject.filter((task) => task.task === taskName.toLocaleUpperCase())
-    if (filteredTask.length === 0) return 'Không tìm thấy Task ❌🔎'
-
-    const orginTaskName = filteredTask[0].originTaskName.trim()
     
+    const task = getTheRightTasks(taskName, taskObject)
 
+    if (!task) return 'Không tìm thấy Task ❌🔎'
+
+    const orginTaskName = task.originTaskName.trim()
 
     if (rows[userIdRow].get(orginTaskName) === 'FALSE') {
       rows[userIdRow].set(orginTaskName, 'TRUE')
@@ -129,13 +139,13 @@ const initTelegramBot = async () => {
       return null
     }
 
-
   }
 
 
 
   // Create a bot instance
   const bot = new TelegramBot(token, { polling: true });
+
 
 
   bot.onText(/\/renameDoc ./, async (msg: Message) => {
