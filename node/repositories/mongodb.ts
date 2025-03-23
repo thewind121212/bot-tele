@@ -1,15 +1,25 @@
 
 import { MongoClient, Db, Collection } from 'mongodb';
 // MongoDB connection URI
-const uri = 'mongodb://root:linhporo1@10.10.0.216:27019';
-const dbName = 'tele_bot_db';
+const uri = process.env.MONGODB_URI;
+const dbName = process.env.DB_NAME  
+
+
+export const checkDbValid = () => {
+    if (!dbName || !dbName ) {
+        console.log('Please provide a valid MongoDB URI and database name');
+        process.exit(1);
+    }
+}
+
+
 const runTimeChatIds: any = []
 let client: MongoClient;
 
 
 export async function connectToDatabase(): Promise<Db> {
     if (!client) {
-        client = new MongoClient(uri, {
+        client = new MongoClient(uri!, {
             maxPoolSize: 10, // Set the connection pool size
         });
         await client.connect();
@@ -66,6 +76,29 @@ export async function findOne(db: Db, collectionName: string, id: any) {
     return document;
 }
 
+
+
+export async function findOneGroupId(db: Db, collectionName: string, groupId: any) {
+
+    const collection: Collection = db.collection(collectionName);
+
+    // Find the document
+    const document = await collection.findOne({
+        groupId,
+    });
+    return document;
+}
+
+
+export async function updateDocument(db: Db, collectionName: string, query: any, update: any) {
+
+    const collection: Collection = db.collection(collectionName);
+
+    // Update the document
+    const result = await collection.updateOne(query, update);
+    return result
+
+}
 
 export async function queryDocuments(db: Db, collectionName: string, query: any) {
     const collection: Collection = db.collection(collectionName);
