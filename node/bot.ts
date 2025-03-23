@@ -1,15 +1,22 @@
-import TelegramBot, { type Message } from "node-telegram-bot-api";
-import { GoogleSpreadsheet, GoogleSpreadsheetRow } from 'google-spreadsheet';
-
-import { serviceAccountAuth } from "./repositories/googleAuth";
-
-
+import TelegramBot, { type InlineKeyboardButton, type Message } from "node-telegram-bot-api";
+import { checkDbValid, connectToDatabase, createCollection, queryDocuments } from "./repositories/mongodb";
+import type { Db, WithId } from "mongodb";
+import { checkDoc, findCurrentDocLinking, getAllTasks, isDocFoundWithGroup, renameDoc, tickTaskDone, linkDoc, remindDeadLine, getAdminOrCreator, getUndoneTasksByUser } from "./services/ProjectManager";
 
 
-const IS_DEV = false
+
+
 const token = process.env.TELEGRAM_BOT_TOKEN || "";
 
-let runTimeChatIds: any = []
+
+const queueDoneTaskMap: {
+  [key: string]: {
+    id: string,
+    userId: string,
+    taskName: string,
+  }
+} = {}
+
 
 if (token === "") {
   console.error("Please provide a valid Telegram Bot Token");
@@ -17,164 +24,166 @@ if (token === "") {
 }
 
 
-//init google auth
 
-const doc = new GoogleSpreadsheet('1htRUzavIEYGGkjiISSltB1u9dv0eWU0q2HRM0OADB2A', serviceAccountAuth);
+const runTimeObject: {
+  chatId: string,
+  docId: string,
+}[] = []
 
-
-// MongoDB client with connection pooling
 const initTelegramBot = async () => {
 
 
 
-  await doc.updateProperties({ title: 'helo' });
+  checkDbValid()
+  const dbClient = await connectToDatabase();
+
+  await createCollection(dbClient, 'project-mamagement')
+
+  const data: WithId<{
+    groupId: string;
+    docId: string
+  }>[] = await queryDocuments(dbClient, 'project-mamagement', {}) as WithId<{
+    groupId: string;
+    docId: string
+  }>[]
 
 
 
-
-  const renameDoc = async (doc: GoogleSpreadsheet, docName: string) => {
-    await doc.updateProperties({ title: docName });
-  }
-
-  const skipCol = 2
-
-  const getAllTasks = async () => {
-    const doc = new GoogleSpreadsheet('1htRUzavIEYGGkjiISSltB1u9dv0eWU0q2HRM0OADB2A', serviceAccountAuth);
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
-    const rows = await sheet.getRows();
-    const tasks = sheet.headerValues
-    const cloneTasks = [...tasks]
-    const taskObject = []
-    // make an map of task with dead line i using one loop for better performance
-    for (let i = skipCol; i < tasks.length; i++) {
-      //the loop start from 2 because the first two rows not using for task
-      const task = tasks[i]
-      const deadLine = await getDeadLineWithTasks(rows, task)
-      cloneTasks[i] = task.trim().toLocaleUpperCase()
-      const hr = deadLine.hr ? deadLine.hr : ''
-      const replyTask = `${task} \n ⏰ ${deadLine.date ? hr + ' - ' + deadLine.date : 'No dead line'}`
-      taskObject.push({
-        replyTask,
-        task: cloneTasks[i],
-        originTaskName: task.trim(),
-        deadLine: deadLine.timeStamps,
-        hr,
-        date: deadLine.date ? deadLine.date : ''
+  if (data.length) {
+    data.map((d) => {
+      runTimeObject.push({
+        chatId: d.groupId,
+        docId: d.docId
       })
-    }
-    taskObject.sort((a, b) => a.deadLine - b.deadLine)
-    const beatifulTasks = taskObject.map((task, i) => {
-      return `${i + 1}. ` + task.replyTask
     })
-
-    return {
-      reply: beatifulTasks,
-      tasks: cloneTasks,
-      taskObject,
-      rows,
-    };
-  }
-
-  const getDeadLineWithTasks = async (rows: GoogleSpreadsheetRow<Record<string, any>>[], taskName: string): Promise<{
-    date: string,
-    hr: string
-    timeStamps: number
-  }> => {
-    const [day, month, year] = rows[2].get(taskName).split('/');
-    const timeStamps = new Date(`${year}-${month}-${day}T${rows[3].get(taskName)}`);
-    return {
-      date: rows[2].get(taskName),
-      hr: rows[3].get(taskName),
-      timeStamps: timeStamps.getTime()
-    }
   }
 
 
-  const getTheRightTasks = (taskName: string, taskObject: {
-    replyTask: string,
-    task: string,
-    originTaskName: string,
-    deadLine: number,
-    hr: string,
-    date: string
-  }[]) => {
-     const filteredTask = taskObject.filter((task) => task.task === taskName.toLocaleUpperCase())
-    const task = filteredTask[0]
-    return task
+  const commands = [
+    { command: 'ping', description: 'Kiểm tra trạng thái sức khỏe của bot để đảm bảo nó đang hoạt động bình thường' },
+    { command: 'done', description: 'Đánh dấu nhiệm vụ đã hoàn thành bằng cách sử dụng /done theo sau là tên nhiệm vụ' },
+    { command: 'tasks', description: 'Liệt kê tất cả các nhiệm vụ có sẵn trong bảng dữ liệu liên kết' },
+    { command: 'doc', description: 'Hiển thị ID tài liệu hiện tại và cung cấp liên kết đến nhóm này' },
+    { command: 'linkdoc', description: 'Liên kết ID tài liệu được chỉ định với nhóm để dễ dàng truy cập' },
+  ];
 
-  }
 
-  const remindDeadLine = async (taskName: string): Promise<string> => {
-    const {  taskObject } = await getAllTasks()
-    const task = getTheRightTasks(taskName, taskObject)
 
-    if (!task) return 'Không tìm thấy Task ❌🔎'
 
-    return `🆘 Team nhớ hoàn thành Deadline ${taskName.toLocaleUpperCase()} trước ${task.hr} ngày ${task.date}`
 
-  }
+  const bot = new TelegramBot(token, {
+    polling: true,
+  });
 
-  const tickTaskDone = async (taskName: string, userId: string): Promise<string | null> => {
 
-    const { rows, taskObject } = await getAllTasks()
-    const userIdRow = rows.findIndex((row) => {
-      return row.get('ID') === userId
+
+
+
+  bot.setMyCommands(commands)
+    .then(() => {
+      console.log('Bot commands have been set successfully!');
     })
+    .catch((error) => {
+      console.error('Error setting bot commands:', error);
+    });
 
-    if (userIdRow === -1) return 'Tài khoản của bạn chưa có trong bản quản lý Task ❌ '
 
-    
-    const task = getTheRightTasks(taskName, taskObject)
-
-    if (!task) return 'Không tìm thấy Task ❌🔎'
-
-    const orginTaskName = task.originTaskName.trim()
-
-    if (rows[userIdRow].get(orginTaskName) === 'FALSE') {
-      rows[userIdRow].set(orginTaskName, 'TRUE')
-      rows[userIdRow].save()
-      return `Hệ thống đã cập nhật task ${orginTaskName} cho bạn ✅`
-    } else {
-      return null
-    }
-
-  }
+  bot.onText(/\/init/, (msg: Message) => {
+    const chatId = msg.chat.id;
+    runTimeObject.push({
+      chatId: chatId.toString().trim(),
+      docId: ''
+    })
+  });
 
 
 
-  // Create a bot instance
-  const bot = new TelegramBot(token, { polling: true });
-
-
-
-  bot.onText(/\/renameDoc ./, async (msg: Message) => {
+  bot.onText(/\/linkdoc ./, async (msg: Message) => {
     const chatId = msg.chat.id;
     if (!msg.text) return
+
+    //allow only admin or creator to link doc
+    const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
+    if (!isAdmin) return bot.sendMessage(chatId, 'Chỉ admin hoặc người tạo nhóm mới có thể liên kết tài liệu ❌')
     const text = msg.text.split(' ')
-    const docName = text.map((t, index) => index === 0 ? '' : t).join(' ')
-    await renameDoc(doc, docName)
-    bot.sendMessage(chatId, `Doc name updated to ${docName}`);
+    const docId = text.map((t, index) => index === 0 ? '' : t).join(' ')
+    //check if doc is valid
+    if (!docId) return bot.sendMessage(chatId, 'ID tài liệu không hợp lệ ❌')
+    //check doc is valid
+    const { isErr, errMsg } = await checkDoc(docId, msg.from?.username!)
+    if (isErr) return bot.sendMessage(chatId, errMsg, {
+      parse_mode: 'HTML'
+    })
+    //link doc and return message
+    return await linkDoc(dbClient, chatId.toString(), docId, bot, msg.from?.username!, runTimeObject)
   })
 
-  bot.onText(/\/listtasks/, async (msg: Message) => {
+
+  bot.onText(/\/doc/, async (msg: Message) => {
     const chatId = msg.chat.id;
-    const allTask = await getAllTasks()
+    //find doc in runtime if not found in db
+    const docId = await findCurrentDocLinking(chatId.toString(), dbClient, runTimeObject)
+    if (!docId) return bot.sendMessage(chatId, 'Không tìm thấy tài liệu liên kết ❌')
+    bot.sendMessage(chatId, `@${msg.from?.username} Tài liệu kết của group là: \n📃 ${docId}`);
+  })
+
+
+
+  bot.onText(/\/renamedoc ./, async (msg: Message) => {
+
+    //check if user is and admin or not
+
+
+
+    //fin doc id in runtime if not found in db
+    const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
+    if (!isFound) return
+    const chatId = msg.chat.id;
+    if (!msg.text) return
+
+    const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
+    if (!isAdmin) return bot.sendMessage(chatId, 'Chỉ admin hoặc người tạo nhóm mới có thể đổi tên tài liệu ❌')
+
+    const text = msg.text.split(' ')
+    const docName = text.map((t, index) => index === 0 ? '' : t).join(' ')
+    // check if doc is valid 
+    const docId = await findCurrentDocLinking(msg.chat.id.toString(), dbClient, runTimeObject)
+    // rename doc
+    await renameDoc(docName, docId)
+    bot.sendMessage(chatId, `@${msg.from?.username} Doc name updated to ${docName}`);
+  })
+
+  bot.onText(/\/tasks/, async (msg: Message) => {
+    const chatId = msg.chat.id;
+    const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
+    if (!isAdmin) return bot.sendMessage(chatId, 'Chỉ admin hoặc người tạo nhóm mới có thể xem danh sách công việc ❌')
+    const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
+    if (!isFound) return
+    const docId = await findCurrentDocLinking(chatId.toString(), dbClient, runTimeObject)
+    const allTask = await getAllTasks(docId, 10, true)
     bot.sendMessage(chatId, `💠 There are ${allTask.reply.length} tasks active: \n ${allTask.reply.join('\n\n ')}`);
   })
 
 
   bot.onText(/\/remind ./, async (msg: Message) => {
+    const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
+    if (!isFound) return
     const chatId = msg.chat.id;
     if (!msg.text) return
+    const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
+    if (!isAdmin) return bot.sendMessage(chatId, 'Chỉ admin hoặc người tạo nhóm mới có thể nhắc nhở deadline ❌')
     const text = msg.text.split(' ')
     const taksName = text.map((t, index) => index === 0 ? '' : t).join(' ')
-    const result = await remindDeadLine(taksName)
-    bot.sendMessage(chatId, result);
+    const docId = await findCurrentDocLinking(chatId.toString(), dbClient, runTimeObject)
+    const result = remindDeadLine(taksName, docId)
+    bot.sendMessage(chatId, `@${msg.from?.username} ${result}`);
   })
 
 
-  bot.onText(/\/done ./, async (msg: Message) => {
+  bot.onText(/\/done/, async (msg: Message) => {
+
+    const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
+    if (!isFound) return
     const chatId = msg.chat.id;
     if (!msg.text) return
     const userId = msg.from?.id
@@ -182,23 +191,101 @@ const initTelegramBot = async () => {
       bot.sendMessage(chatId, 'User is not found ❌')
       return
     }
-    const text = msg.text.split(' ')
-    const taksName = text.map((t, index) => index === 0 ? '' : t).join(' ')
-    const result = await tickTaskDone(taksName.trim(), userId.toString())
-    if (result) {
-      bot.sendMessage(chatId, `@${msg.from?.username} ${result}`);
-    }
+    const docId = await findCurrentDocLinking(msg.chat.id.toString(), dbClient, runTimeObject)
+    const undoneTasks = await getUndoneTasksByUser(msg.from?.id!.toString().trim() as string, docId)
+    if (undoneTasks.length === 0) return bot.sendMessage(chatId, `@${msg.from?.username} 🏅 Không có task nào còn lại 🏅`)
+    const taskSuggestions: any = []
+    undoneTasks.map((t) => taskSuggestions.push([{ text: t, callback_data: `done_task-${t}` }]))
+
+    const keyboard = {
+      inline_keyboard: [
+        ...taskSuggestions
+      ]
+    };
+    bot.sendMessage(chatId, 'Choose a task to mark as done:', { reply_markup: keyboard });
   })
 
+  bot.on("callback_query", async (callbackQuery) => {
+    const data: any = callbackQuery.data;
+    const chatId = callbackQuery.message?.chat.id;
+    const userId = callbackQuery.from.id;
+    const userName = callbackQuery.from.username
+    const messageId = callbackQuery.message?.message_id;
+    const tag = data.split('-')[0]
+    if (tag !== 'done_task') return
+
+    const taskName = data.split('-')[1]
+
+    if (!data || !chatId || !userId || !userName || !messageId) return
+
+    const processId = `${chatId}-${userId}-${taskName}`
+    //find is the task id in queue
+
+    const isBeingProcessed = Object.keys(queueDoneTaskMap).includes(processId)
+
+
+    if (isBeingProcessed) return
+
+
+    queueDoneTaskMap[processId] = {
+      id: processId,
+      userId: userId.toString(),
+      taskName: taskName as string,
+    }
+
+    let newInlineKeyBoard: InlineKeyboardButton[][] = []
+    const inlineKeyboard: InlineKeyboardButton[][] | undefined = callbackQuery.message?.reply_markup?.inline_keyboard
+
+    if (inlineKeyboard) {
+      newInlineKeyBoard = inlineKeyboard.map((row) => row.filter((button) => button.callback_data !== data))
+    }
+
+
+
+    if (newInlineKeyBoard.length > 1) {
+      bot.editMessageReplyMarkup({ inline_keyboard: newInlineKeyBoard }, { chat_id: chatId, message_id: messageId })
+        .then(() => {
+          console.log(`Inline keyboard removed from message ${messageId} in chat ${chatId}`);
+        })
+        .catch((error) => {
+          console.error('Error removing inline keyboard:', error);
+        });
+    }
 
 
 
 
 
 
-  bot.onText(/\/ping/, (msg: Message) => {
+    const docId = await findCurrentDocLinking(chatId?.toString()!, dbClient, runTimeObject)
+    const result = await tickTaskDone(taskName.trim(), userId.toString(), docId)
+    if (result) {
+      bot.sendMessage(chatId!, `@${userName!}\n${result}`, {
+        parse_mode: 'HTML'
+      });
+    }
+
+    if (newInlineKeyBoard.length === 1) {
+      bot.deleteMessage(chatId, messageId)
+        .then(() => {
+        })
+        .catch((error) => {
+          console.error('Error deleting message:', error);
+        });
+    }
+
+    //remove task from queue
+    delete queueDoneTaskMap[processId]
+  });
+
+
+
+
+  bot.onText(/\/ping/, async (msg: Message) => {
     const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "Pong!!");
+    const admins = await bot.getChatAdministrators(chatId)
+    console.log(admins)
+    bot.sendMessage(chatId, "🏓 Pong! Bot Đang Hoạt động");
   });
 
 
@@ -207,7 +294,13 @@ const initTelegramBot = async () => {
   });
 
 
+
 }
 
 
+
+
 initTelegramBot()
+
+
+
