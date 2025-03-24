@@ -1,9 +1,22 @@
 version: "3.8"
 
 services:
-  tele-bot-manager:
+  mongodb:
+    image: mongo:latest
+    container_name: tele-bot-db
+    ports:
+      - "27019:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=tele_bot_db
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=linhporo1
+    volumes:
+      - ./data:/data/db
+      - ./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js
+
+  tele-bot:
     image: oven/bun:latest
-    container_name: tele-bot-manager
+    container_name: tele-bot
     working_dir: /app
     volumes:
       - ./:/app

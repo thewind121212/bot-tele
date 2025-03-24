@@ -17,6 +17,10 @@ const queueDoneTaskMap: {
   }
 } = {}
 
+const queueDeleteTaskMap: {
+  [key: string]: NodeJS.Timer
+} = {}
+
 
 if (token === "") {
   console.error("Please provide a valid Telegram Bot Token");
@@ -202,11 +206,29 @@ const initTelegramBot = async () => {
     const taskSuggestions: any = []
     undoneTasks.map((t) => taskSuggestions.push([{ text: t, callback_data: `done_task-${t}` }]))
 
-    bot.sendMessage(chatId, `@${msg.from?.username} Choose a task to mark as done:`, {
+    const msgSendResult = await bot.sendMessage(chatId, `@${msg.from?.username} Choose a task to mark as done:`, {
       reply_markup: {
         inline_keyboard: taskSuggestions,
       },
     });
+
+
+    bot.deleteMessage(chatId!, msg.message_id!)
+      .catch((error) => {
+        console.error('Error deleting message:', error);
+      });
+
+
+    queueDeleteTaskMap[`${chatId}-${userId}-${msgSendResult.message_id}`] =  setTimeout(() => {
+      bot.deleteMessage(chatId!, msgSendResult.message_id!)
+        .then(() => {
+        })
+        .catch((error) => {
+          console.error('Error deleting message:', error);
+        });
+
+    }, 15000);
+
   })
 
   bot.on("callback_query", async (callbackQuery) => {
@@ -216,6 +238,9 @@ const initTelegramBot = async () => {
     const userId = callbackQuery.from.id;
     const userName = callbackQuery.from.username
     const messageId = callbackQuery.message?.message_id;
+
+    clearTimeout(queueDeleteTaskMap[`${chatId}-${userId}-${messageId}`])
+
     if (callbackQuery.message?.chat.type === 'private') return bot.sendMessage(chatId!, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const tag = data.split('-')[0]
 
