@@ -63,7 +63,7 @@ const initTelegramBot = async () => {
     { command: 'ping', description: 'Kiểm tra trạng thái sức khỏe của bot để đảm bảo nó đang hoạt động bình thường' },
     { command: 'done', description: 'Đánh dấu nhiệm vụ đã hoàn thành bằng cách sử dụng /done theo sau là tên nhiệm vụ' },
     { command: 'tasks', description: 'Liệt kê tất cả các nhiệm vụ có sẵn trong bảng dữ liệu liên kết' },
-    { command: 'doc', description: 'Hiển thị ID tài liệu hiện tại và cung cấp liên kết đến nhóm này' },
+    { command: 'currentdoc', description: 'Hiển thị ID tài liệu hiện tại và cung cấp liên kết đến nhóm này' },
     { command: 'linkdoc', description: 'Liên kết ID tài liệu được chỉ định với nhóm để dễ dàng truy cập' },
   ];
 
@@ -102,6 +102,7 @@ const initTelegramBot = async () => {
     const chatId = msg.chat.id;
     if (!msg.text) return
 
+    if (msg.chat.type === 'private') return bot.sendMessage(msg.chat.id, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     //allow only admin or creator to link doc
     const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
     if (!isAdmin) return bot.sendMessage(chatId, 'Chỉ admin hoặc người tạo nhóm mới có thể liên kết tài liệu ❌')
@@ -119,7 +120,7 @@ const initTelegramBot = async () => {
   })
 
 
-  bot.onText(/\/doc/, async (msg: Message) => {
+  bot.onText(/\/currentdoc/, async (msg: Message) => {
     const chatId = msg.chat.id;
     //find doc in runtime if not found in db
     const docId = await findCurrentDocLinking(chatId.toString(), dbClient, runTimeObject)
@@ -133,6 +134,7 @@ const initTelegramBot = async () => {
 
     //check if user is and admin or not
 
+    if (msg.chat.type === 'private') return bot.sendMessage(msg.chat.id, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
 
 
     //fin doc id in runtime if not found in db
@@ -155,7 +157,9 @@ const initTelegramBot = async () => {
 
   bot.onText(/\/tasks/, async (msg: Message) => {
     const chatId = msg.chat.id;
+    if (msg.chat.type === 'private') return bot.sendMessage(chatId, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
+    console.log(isAdmin)
     if (!isAdmin) return bot.sendMessage(chatId, 'Chỉ admin hoặc người tạo nhóm mới có thể xem danh sách công việc ❌')
     const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
     if (!isFound) return
@@ -166,6 +170,7 @@ const initTelegramBot = async () => {
 
 
   bot.onText(/\/remind ./, async (msg: Message) => {
+    if (msg.chat.type === 'private') return bot.sendMessage(msg.chat.id, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
     if (!isFound) return
     const chatId = msg.chat.id;
@@ -181,7 +186,7 @@ const initTelegramBot = async () => {
 
 
   bot.onText(/\/done/, async (msg: Message) => {
-
+    if (msg.chat.type === 'private') return bot.sendMessage(msg.chat.id, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
     if (!isFound) return
     const chatId = msg.chat.id;
@@ -197,21 +202,29 @@ const initTelegramBot = async () => {
     const taskSuggestions: any = []
     undoneTasks.map((t) => taskSuggestions.push([{ text: t, callback_data: `done_task-${t}` }]))
 
-    const keyboard = {
-      inline_keyboard: [
-        ...taskSuggestions
-      ]
-    };
-    bot.sendMessage(chatId, 'Choose a task to mark as done:', { reply_markup: keyboard });
+    bot.sendMessage(chatId, `@${msg.from?.username} Choose a task to mark as done:`, {
+      reply_markup: {
+        inline_keyboard: taskSuggestions,
+      },
+    });
   })
 
   bot.on("callback_query", async (callbackQuery) => {
+
     const data: any = callbackQuery.data;
     const chatId = callbackQuery.message?.chat.id;
     const userId = callbackQuery.from.id;
     const userName = callbackQuery.from.username
     const messageId = callbackQuery.message?.message_id;
+    if (callbackQuery.message?.chat.type === 'private') return bot.sendMessage(chatId!, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const tag = data.split('-')[0]
+
+    bot.deleteMessage(chatId!, messageId!)
+      .then(() => {
+      })
+      .catch((error) => {
+        console.error('Error deleting message:', error);
+      });
     if (tag !== 'done_task') return
 
     const taskName = data.split('-')[1]
@@ -233,27 +246,6 @@ const initTelegramBot = async () => {
       taskName: taskName as string,
     }
 
-    let newInlineKeyBoard: InlineKeyboardButton[][] = []
-    const inlineKeyboard: InlineKeyboardButton[][] | undefined = callbackQuery.message?.reply_markup?.inline_keyboard
-
-    if (inlineKeyboard) {
-      newInlineKeyBoard = inlineKeyboard.map((row) => row.filter((button) => button.callback_data !== data))
-    }
-
-
-
-    if (newInlineKeyBoard.length > 1) {
-      bot.editMessageReplyMarkup({ inline_keyboard: newInlineKeyBoard }, { chat_id: chatId, message_id: messageId })
-        .then(() => {
-          console.log(`Inline keyboard removed from message ${messageId} in chat ${chatId}`);
-        })
-        .catch((error) => {
-          console.error('Error removing inline keyboard:', error);
-        });
-    }
-
-
-
 
 
 
@@ -265,14 +257,6 @@ const initTelegramBot = async () => {
       });
     }
 
-    if (newInlineKeyBoard.length === 1) {
-      bot.deleteMessage(chatId, messageId)
-        .then(() => {
-        })
-        .catch((error) => {
-          console.error('Error deleting message:', error);
-        });
-    }
 
     //remove task from queue
     delete queueDoneTaskMap[processId]

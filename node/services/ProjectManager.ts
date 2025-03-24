@@ -3,15 +3,16 @@ import { serviceAccountAuth } from "../repositories/googleAuth";
 import type TelegramBot from "node-telegram-bot-api";
 import type { Db } from "mongodb";
 import { findOneGroupId, insertDocument, updateDocument } from "../repositories/mongodb";
+import type { ChatMember } from "node-telegram-bot-api";
 
 const SKIP_COL = 3;
 
 
 export const getAdminOrCreator = async (chatId: string, bot: TelegramBot, userId: number) => {
     const admins = await bot.getChatAdministrators(chatId)
-    admins.find((admin) => admin.user.id === userId)
-    if (!admins) return false
-    const role = admins[0].status
+    const adminsFiltered : ChatMember | undefined =  admins.find((admin) => admin.user.id === userId)
+    if (!adminsFiltered ) return false
+    const role = adminsFiltered.status
     if (role === 'creator' || role === 'administrator') return true
     return false
 }
