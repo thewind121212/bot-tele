@@ -267,8 +267,7 @@ const initTelegramBot = async () => {
 
   bot.onText(/\/ping/, async (msg: Message) => {
     const chatId = msg.chat.id;
-    const admins = await bot.getChatAdministrators(chatId)
-    console.log(admins)
+    if (msg.chat.type === 'private') return bot.sendMessage(chatId, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     bot.sendMessage(chatId, "🏓 Pong! Bot Đang Hoạt động");
   });
 
