@@ -44,12 +44,14 @@ export const getDeadLineWithTasks = async (rows: GoogleSpreadsheetRow<Record<str
     date: string,
     hr: string,
     timeStamps: number
-}> => {
-    const [day, month, year] = rows[2].get(taskName).split('/');
-    const timeStamps = new Date(`${year}-${month}-${day}T${rows[3].get(taskName)}`);
+} | null> => {
+    if (!rows[1].get(taskName)) return null
+     
+    const [day, month, year] = rows[1].get(taskName).split('/');
+    const timeStamps = new Date(`${year}-${month}-${day}T${rows[2].get(taskName)}`);
     return {
-        date: rows[2].get(taskName),
-        hr: rows[3].get(taskName),
+        date: rows[1].get(taskName),
+        hr: rows[2].get(taskName),
         timeStamps: timeStamps.getTime()
     };
 };
@@ -92,15 +94,14 @@ export const getAllTasks = async (docId: string, limit: number = 10, getDeadline
         let replyTask = task;
         if (getDeadline) {
             const deadLine = await getDeadLineWithTasks(rows, task);
-            const hr = deadLine.hr ? deadLine.hr : '';
-            replyTask = `${task} \n ⏰ ${deadLine.date ? hr + ' - ' + deadLine.date : 'No dead line'}`;
+            const deadLineForReply = deadLine ?  deadLine.date ? `${deadLine.date} - ${deadLine.hr ? deadLine.hr : ''}` : 'No dead line' : "No dead line" 
+            replyTask = `${task} \n ⏰ ${deadLineForReply}`
             taskObject.push({
                 replyTask,
                 task: task.trim().toLocaleUpperCase(),
                 originTaskName: task.trim(),
-                deadLine: deadLine.timeStamps,
-                hr,
-                date: deadLine.date ? deadLine.date : ''
+                deadLine: null,
+                date: "",
             });
         }
         else {
@@ -116,9 +117,18 @@ export const getAllTasks = async (docId: string, limit: number = 10, getDeadline
 
     }
 
-    taskObject.sort((a, b) => a.deadLine - b.deadLine);
+    const cloneTaskObject = [...taskObject];
+    
+    const filterHasDeadline = cloneTaskObject.filter((task) => task.deadLine !== null);
+    const filterHasNoDeadline = cloneTaskObject.filter((task) => task.deadLine === null);
 
-    const beautifulTasks = taskObject.map((task, i) => `${i + 1}. ${task.replyTask}`);
+
+    filterHasDeadline.sort((a, b) => a.deadLine - b.deadLine)
+
+    filterHasDeadline.push(...filterHasNoDeadline as any)
+
+
+    const beautifulTasks = filterHasDeadline.map((task, i) => `${i + 1}. ${task.replyTask}`);
     return {
         reply: beautifulTasks,
         tasks: tasks.slice(SKIP_COL),
@@ -137,7 +147,7 @@ export const tickTaskDone = async (taskName: string, userId: string, docId: stri
 
     if (userIdRow === -1) return 'Tài khoản của bạn chưa có trong bản quản lý Task ❌';
 
-    const task = getTheRightTasks(taskName, taskObject);
+    const task = getTheRightTasks(taskName, taskObject as any);
     if (!task) return 'Không tìm thấy Task ❌🔎';
 
     const originTaskName = task.originTaskName.trim();
@@ -194,7 +204,7 @@ export const findCurrentDocLinking = async (chatId: string, db: Db, runtimeTasks
 
 export const remindDeadLine = async (taskName: string, docId: string): Promise<string> => {
     const { taskObject } = await getAllTasks(docId, 10, true)
-    const task = getTheRightTasks(taskName, taskObject)
+    const task = getTheRightTasks(taskName, taskObject as any)
 
     if (!task) return 'Không tìm thấy Task ❌🔎'
 
