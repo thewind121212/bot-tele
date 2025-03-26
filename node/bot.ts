@@ -124,7 +124,9 @@ const initTelegramBot = async () => {
   })
 
 
-  bot.onText(/\/currentdoc/, async (msg: Message) => {
+  bot.on("message", async (msg: Message) => {
+    if (!msg.text) return
+    if (!msg.text.startsWith('/currentdoc')) return
     const chatId = msg.chat.id;
     //find doc in runtime if not found in db
     const docId = await findCurrentDocLinking(chatId.toString(), dbClient, runTimeObject)
@@ -159,7 +161,9 @@ const initTelegramBot = async () => {
     bot.sendMessage(chatId, `@${msg.from?.username} Doc name updated to ${docName}`);
   })
 
-  bot.onText(/\/tasks/, async (msg: Message) => {
+  bot.on('message', async (msg: Message) => {
+    if (!msg.text) return
+    if (!msg.text.startsWith('/tasks')) return
     const chatId = msg.chat.id;
     if (msg.chat.type === 'private') return bot.sendMessage(chatId, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const isAdmin = await getAdminOrCreator(chatId.toString(), bot, msg.from?.id!)
@@ -189,7 +193,9 @@ const initTelegramBot = async () => {
   })
 
 
-  bot.onText(/\/done/, async (msg: Message) => {
+  bot.on('message', async (msg: Message) => {
+    if (!msg.text) return
+    if (!msg.text.startsWith('/done')) return
     if (msg.chat.type === 'private') return bot.sendMessage(msg.chat.id, 'Không thể sử dụng lệnh này trong chat riêng tư ❌')
     const isFound = isDocFoundWithGroup(msg.chat.id.toString(), bot, runTimeObject)
     if (!isFound) return
