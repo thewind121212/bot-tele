@@ -1,5 +1,6 @@
 import TelegramBot, { type InlineKeyboardButton, type Message } from "node-telegram-bot-api";
 import { checkDbValid, connectToDatabase, createCollection, queryDocuments } from "./repositories/mongodb";
+import { findUserThatAssignedInSheet } from "./services/ProjectManager";
 import type { Db, WithId } from "mongodb";
 import { checkDoc, findCurrentDocLinking, getAllTasks, isDocFoundWithGroup, renameDoc, tickTaskDone, linkDoc, remindDeadLine, getAdminOrCreator, getUndoneTasksByUser } from "./services/ProjectManager";
 
@@ -207,8 +208,31 @@ const initTelegramBot = async () => {
       return
     }
     const docId = await findCurrentDocLinking(msg.chat.id.toString(), dbClient, runTimeObject)
+    const isUserFoundInSheet = await findUserThatAssignedInSheet(userId.toString(), docId)
+
+    if (isUserFoundInSheet) {
+
+      bot.deleteMessage(chatId!, msg.message_id!)
+        .catch((error) => {
+          console.error('Error deleting message:', error);
+        });
+      return bot.sendMessage(chatId, `@${msg.from?.username} Tài khoản của bạn chưa có trong sheet quản lý Task ❌`)
+    }
+
+
     const undoneTasks = await getUndoneTasksByUser(msg.from?.id!.toString().trim() as string, docId)
-    if (undoneTasks.length === 0) return bot.sendMessage(chatId, `@${msg.from?.username} 🏅 Không có task nào còn lại 🏅`)
+
+    if (undoneTasks.length === 0) {
+
+      bot.deleteMessage(chatId!, msg.message_id!)
+        .catch((error) => {
+          console.error('Error deleting message:', error);
+        });
+
+
+
+      return bot.sendMessage(chatId, `@${msg.from?.username} 🏅 Không có task nào còn lại 🏅`)
+    }
     const taskSuggestions: any = []
     undoneTasks.map((t) => taskSuggestions.push([{ text: t, callback_data: `done_task-${t}` }]))
 
@@ -225,7 +249,7 @@ const initTelegramBot = async () => {
       });
 
 
-    queueDeleteTaskMap[`${chatId}-${userId}-${msgSendResult.message_id}`] =  setTimeout(() => {
+    queueDeleteTaskMap[`${chatId}-${userId}-${msgSendResult.message_id}`] = setTimeout(() => {
       bot.deleteMessage(chatId!, msgSendResult.message_id!)
         .then(() => {
         })

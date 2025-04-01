@@ -100,7 +100,7 @@ export const getAllTasks = async (docId: string, limit: number = 10, getDeadline
                 replyTask,
                 task: task.trim().toLocaleUpperCase(),
                 originTaskName: task.trim(),
-                deadLine: null,
+                deadLine: deadLine ? deadLine.timeStamps : null,
                 date: "",
             });
         }
@@ -118,12 +118,14 @@ export const getAllTasks = async (docId: string, limit: number = 10, getDeadline
     }
 
     const cloneTaskObject = [...taskObject];
+
     
     const filterHasDeadline = cloneTaskObject.filter((task) => task.deadLine !== null);
     const filterHasNoDeadline = cloneTaskObject.filter((task) => task.deadLine === null);
 
 
-    filterHasDeadline.sort((a, b) => a.deadLine - b.deadLine)
+
+    filterHasDeadline.sort((a, b) => a.deadLine! - b.deadLine!)
 
     filterHasDeadline.push(...filterHasNoDeadline as any)
 
@@ -141,11 +143,20 @@ export const getTheRightTasks = (taskName: string, taskObject: { replyTask: stri
     return taskObject.find((task) => task.task === taskName.trim().toLocaleUpperCase()) || null;
 };
 
+export const findUserThatAssignedInSheet = async  (userId: string, docId: string) => {
+    const { rows } = await getAllTasks(docId, 100, false);
+    const userIdRow = rows.findIndex((row) => row.get('ID') === userId);
+
+    if (userIdRow === -1) return true
+    return false
+
+}
+
 export const tickTaskDone = async (taskName: string, userId: string, docId: string): Promise<string | null> => {
     const { rows, taskObject } = await getAllTasks(docId, 100, false);
     const userIdRow = rows.findIndex((row) => row.get('ID') === userId);
 
-    if (userIdRow === -1) return 'Tài khoản của bạn chưa có trong bản quản lý Task ❌';
+    if (userIdRow === -1) return 'Tài khoản của bạn chưa có trong sheet quản lý Task ❌'; 
 
     const task = getTheRightTasks(taskName, taskObject as any);
     if (!task) return 'Không tìm thấy Task ❌🔎';
